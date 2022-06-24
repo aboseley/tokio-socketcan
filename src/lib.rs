@@ -41,7 +41,7 @@ use mio::{event, unix::SourceFd, Interest, Registry, Token};
 
 use thiserror::Error as ThisError;
 
-pub use socketcan::{CANFilter, CANFrame, CANSocketOpenError};
+pub use socketcan::{CANFilter, CANFrame, CANSocketOpenError, ShouldRetry};
 use tokio::io::unix::AsyncFd;
 
 #[derive(Debug, ThisError)]
@@ -66,10 +66,14 @@ impl Future for CANWriteFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let _ = ready!(self.socket.0.poll_write_ready(cx))?;
-        match self.socket.0.get_ref().0.write_frame_insist(&self.frame) {
-            Ok(_) => Poll::Ready(Ok(())),
-            Err(err) => Poll::Ready(Err(err)),
+        while let Err(err) = self.socket.0.get_ref().0.write_frame(&self.frame) {
+            if err.should_retry() {
+                let _ = ready!(self.socket.0.poll_write_ready(cx))?;
+            } else{
+                return Poll::Ready(Err(err));
+            }
         }
+        Poll::Ready(Ok(()))
     }
 }
 
